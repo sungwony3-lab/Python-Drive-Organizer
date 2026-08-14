@@ -12,6 +12,14 @@ CREATE TABLE IF NOT EXISTS files (
     name TEXT NOT NULL,
     mime_type TEXT NOT NULL,
     extension TEXT,
+    normalized_name TEXT,
+    base_name TEXT,
+    revision_type TEXT,
+    revision_number INTEGER,
+    copy_type TEXT,
+    copy_number INTEGER,
+    auto_action TEXT NOT NULL DEFAULT 'NONE',
+    parser_version TEXT,
     size_bytes INTEGER,
     created_time TEXT,
     modified_time TEXT,
@@ -58,12 +66,54 @@ CREATE TABLE IF NOT EXISTS scan_state (
     message TEXT,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS file_groups (
+    group_id TEXT PRIMARY KEY,
+    parent_id TEXT,
+    group_base_name TEXT NOT NULL,
+    extension TEXT,
+    member_count INTEGER NOT NULL,
+    revision_count INTEGER NOT NULL,
+    copy_count INTEGER NOT NULL,
+    auto_delete_count INTEGER NOT NULL,
+    latest_revision_number INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_groups_lookup
+ON file_groups(parent_id, group_base_name, extension);
+
+CREATE TABLE IF NOT EXISTS file_group_members (
+    group_id TEXT NOT NULL,
+    file_id TEXT NOT NULL,
+    member_type TEXT NOT NULL,
+    revision_number INTEGER,
+    copy_number INTEGER,
+    auto_action TEXT NOT NULL,
+    PRIMARY KEY(group_id, file_id),
+    UNIQUE(file_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_group_members_group_id
+ON file_group_members(group_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_file_group_members_file_id
+ON file_group_members(file_id);
 """
 
 
 MIGRATION_COLUMNS = {
     "files": {
         "last_seen_scan_id": "TEXT",
+        "normalized_name": "TEXT",
+        "base_name": "TEXT",
+        "revision_type": "TEXT",
+        "revision_number": "INTEGER",
+        "copy_type": "TEXT",
+        "copy_number": "INTEGER",
+        "auto_action": "TEXT NOT NULL DEFAULT 'NONE'",
+        "parser_version": "TEXT",
     },
     "folders": {
         "last_seen_scan_id": "TEXT",
@@ -81,9 +131,16 @@ MIGRATION_COLUMNS = {
 }
 
 
-def connect_database(path: Path = DATABASE_PATH) -> sqlite3.Connection:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path)
+def connect_database(
+    path: Path = DATABASE_PATH, read_only: bool = False
+) -> sqlite3.Connection:
+    if read_only:
+        connection = sqlite3.connect(
+            f"{path.resolve().as_uri()}?mode=ro", uri=True
+        )
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(path)
     connection.row_factory = sqlite3.Row
     return connection
 
@@ -129,7 +186,9 @@ def load_existing_files(connection: sqlite3.Connection) -> dict[str, dict]:
         """
         SELECT file_id, name, mime_type, extension, size_bytes, created_time,
                modified_time, parent_id, md5_checksum, trashed, owned_by_me,
-               scan_id, last_seen_scan_id, indexed_at
+               scan_id, last_seen_scan_id, indexed_at, normalized_name,
+               base_name, revision_type, revision_number, copy_type,
+               copy_number, auto_action, parser_version
         FROM files
         """
     )
@@ -152,13 +211,17 @@ def insert_files(connection: sqlite3.Connection, records: list[dict]) -> None:
     connection.executemany(
         """
         INSERT INTO files (
-            file_id, name, mime_type, extension, size_bytes, created_time,
-            modified_time, parent_id, md5_checksum, trashed, owned_by_me,
-            scan_id, last_seen_scan_id, indexed_at
+            file_id, name, mime_type, extension, normalized_name, base_name,
+            revision_type, revision_number, copy_type, copy_number, auto_action,
+            parser_version, size_bytes, created_time, modified_time, parent_id,
+            md5_checksum, trashed, owned_by_me, scan_id, last_seen_scan_id,
+            indexed_at
         ) VALUES (
-            :file_id, :name, :mime_type, :extension, :size_bytes, :created_time,
-            :modified_time, :parent_id, :md5_checksum, :trashed, :owned_by_me,
-            :scan_id, :last_seen_scan_id, :indexed_at
+            :file_id, :name, :mime_type, :extension, :normalized_name,
+            :base_name, :revision_type, :revision_number, :copy_type,
+            :copy_number, :auto_action, :parser_version, :size_bytes,
+            :created_time, :modified_time, :parent_id, :md5_checksum,
+            :trashed, :owned_by_me, :scan_id, :last_seen_scan_id, :indexed_at
         )
         """,
         records,
@@ -174,6 +237,14 @@ def update_files(connection: sqlite3.Connection, records: list[dict]) -> None:
             name = :name,
             mime_type = :mime_type,
             extension = :extension,
+            normalized_name = :normalized_name,
+            base_name = :base_name,
+            revision_type = :revision_type,
+            revision_number = :revision_number,
+            copy_type = :copy_type,
+            copy_number = :copy_number,
+            auto_action = :auto_action,
+            parser_version = :parser_version,
             size_bytes = :size_bytes,
             created_time = :created_time,
             modified_time = :modified_time,
@@ -184,6 +255,42 @@ def update_files(connection: sqlite3.Connection, records: list[dict]) -> None:
             scan_id = :scan_id,
             last_seen_scan_id = :last_seen_scan_id,
             indexed_at = :indexed_at
+        WHERE file_id = :file_id
+        """,
+        records,
+    )
+
+
+def load_files_needing_parser(
+    connection: sqlite3.Connection, parser_version: str
+) -> list[dict]:
+    rows = connection.execute(
+        """
+        SELECT file_id, name, extension
+        FROM files
+        WHERE parser_version IS NULL OR parser_version <> ?
+        """,
+        (parser_version,),
+    )
+    return [dict(row) for row in rows]
+
+
+def update_file_parser_results(
+    connection: sqlite3.Connection, records: list[dict]
+) -> None:
+    if not records:
+        return
+    connection.executemany(
+        """
+        UPDATE files SET
+            normalized_name = :normalized_name,
+            base_name = :base_name,
+            revision_type = :revision_type,
+            revision_number = :revision_number,
+            copy_type = :copy_type,
+            copy_number = :copy_number,
+            auto_action = :auto_action,
+            parser_version = :parser_version
         WHERE file_id = :file_id
         """,
         records,

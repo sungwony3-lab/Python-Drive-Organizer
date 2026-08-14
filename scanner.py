@@ -17,6 +17,7 @@ from database import (
     update_folders,
 )
 from drive_client import iter_drive_items
+from name_parser import PARSER_VERSION, parse_filename
 
 
 FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
@@ -33,6 +34,16 @@ FILE_COMPARE_FIELDS = (
     "owned_by_me",
 )
 FOLDER_COMPARE_FIELDS = ("name", "parent_id")
+PARSER_FIELDS = (
+    "normalized_name",
+    "base_name",
+    "revision_type",
+    "revision_number",
+    "copy_type",
+    "copy_number",
+    "auto_action",
+    "parser_version",
+)
 
 
 @dataclass
@@ -139,6 +150,7 @@ def index_drive(
             file_inserts.append(
                 {
                     **current,
+                    **parse_filename(current["name"], current["extension"]),
                     "scan_id": scan_id,
                     "last_seen_scan_id": scan_id,
                     "indexed_at": indexed_at,
@@ -147,9 +159,21 @@ def index_drive(
         elif records_equal(existing, current, FILE_COMPARE_FIELDS):
             file_skips.append(file_id)
         else:
+            if (
+                existing["name"] != current["name"]
+                or existing.get("parser_version") != PARSER_VERSION
+            ):
+                parser_result = parse_filename(
+                    current["name"], current["extension"]
+                )
+            else:
+                parser_result = {
+                    field: existing.get(field) for field in PARSER_FIELDS
+                }
             file_updates.append(
                 {
                     **current,
+                    **parser_result,
                     "scan_id": scan_id,
                     "last_seen_scan_id": scan_id,
                     "indexed_at": indexed_at,

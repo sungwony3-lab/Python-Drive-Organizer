@@ -1,0 +1,801 @@
+openapi: 3.1.0
+info:
+  title: Python Drive Organizer Read-Only Index API
+  version: 1.2-MVP04
+  description: >-
+    Read-only access to a SQLite index of Google Drive file and folder metadata.
+    This API does not read file contents, call Google Drive during requests, or
+    create, update, move, copy, trash, or delete Drive items.
+servers:
+  - url: https://drive-api.sungwony.pe.kr
+    description: Cloudflare HTTPS endpoint for the local read-only index API
+security:
+  - BearerAuth: []
+paths:
+  /status:
+    get:
+      operationId: getDriveStatus
+      summary: Get the current Drive index status
+      description: >-
+        Use this to check counts and the latest completed or attempted SQLite
+        metadata-index scan. It reports index state, not live Google Drive state.
+      responses:
+        "200":
+          description: Current SQLite index counts and latest scan status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /files/search:
+    get:
+      operationId: searchFiles
+      summary: Search indexed files by name
+      description: >-
+        Search the SQLite Google Drive metadata index for files whose name,
+        normalized name, or base name contains the query. This does not search
+        file contents or query Google Drive live.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Non-empty case-insensitive filename substring to search.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of result items to return, from 1 through 1000.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        "200":
+          description: Matching indexed file metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileSearchResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /folders/search:
+    get:
+      operationId: searchFolders
+      summary: Search indexed folders by name
+      description: >-
+        Search indexed Google Drive folder metadata by a case-insensitive name
+        substring. Use a returned folder_id for children or subtree requests.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Non-empty case-insensitive folder-name substring to search.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of result items to return, from 1 through 1000.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        "200":
+          description: Matching indexed folder metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FolderSearchResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /folders/{folder_id}/children:
+    get:
+      operationId: listFolderChildren
+      summary: List children of an indexed folder
+      description: >-
+        List direct children or all indexed descendants of a folder. The
+        folder_id must come from the user or a previous API result. This reads
+        the SQLite index only.
+      parameters:
+        - name: folder_id
+          in: path
+          required: true
+          description: Exact indexed folder ID.
+          schema:
+            type: string
+        - name: recursive
+          in: query
+          required: false
+          description: Include all descendants when true; otherwise list direct children.
+          schema:
+            type: boolean
+            default: false
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of result items to return, from 1 through 1000.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        "200":
+          description: Direct children or recursively collected descendants.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FolderChildrenResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /folders/tree:
+    get:
+      operationId: getFolderTree
+      summary: Render the indexed folder tree
+      description: >-
+        Render a deterministic text tree from SQLite folder metadata. Optionally
+        start at an exact folder_id, restrict depth, or include indexed file
+        names. The result is not a live Google Drive traversal.
+      parameters:
+        - name: root_folder
+          in: query
+          required: false
+          description: Optional exact folder_id to use as the tree root.
+          schema:
+            type: string
+        - name: max_depth
+          in: query
+          required: false
+          description: Optional maximum depth from the selected root; zero returns the root level.
+          schema:
+            type: integer
+            minimum: 0
+        - name: include_files
+          in: query
+          required: false
+          description: Include indexed file names in the text tree when true.
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Rendered folder tree and included item counts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TreeResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /revisions:
+    get:
+      operationId: listRevisions
+      summary: List parser-classified Revision files
+      description: >-
+        Return Revision metadata already classified by the Python filename
+        parser and stored in SQLite. Use min_revision only when the user requests
+        a minimum parsed revision number.
+      parameters:
+        - name: min_revision
+          in: query
+          required: false
+          description: Optional minimum parsed Revision number, inclusive.
+          schema:
+            type: integer
+            minimum: 0
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of result items to return, from 1 through 1000.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        "200":
+          description: Indexed files classified as Revisions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevisionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /copies:
+    get:
+      operationId: listCopies
+      summary: List parser-classified Copy files
+      description: >-
+        Return Copy metadata already classified by the Python filename parser
+        and stored in SQLite. No Drive copy operation is performed.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of result items to return, from 1 through 1000.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        "200":
+          description: Indexed files classified as Copies.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CopyResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auto-delete:
+    get:
+      operationId: listAutoDeleteFiles
+      summary: List files carrying the DELETE classification
+      description: >-
+        Return files whose stored parser classification is auto_action=DELETE.
+        This is classification metadata only; no file is trashed or deleted and
+        drive_action_executed is always false.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of result items to return, from 1 through 1000.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        "200":
+          description: Stored DELETE classifications with explicit safety flags.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutoDeleteResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /groups:
+    get:
+      operationId: listFileGroups
+      summary: List deterministic indexed file groups
+      description: >-
+        Return file groups and member metadata already produced by the Python
+        grouping logic and stored in SQLite. This does not infer new groups or
+        change Drive files.
+      parameters:
+        - name: min_members
+          in: query
+          required: false
+          description: Minimum stored member_count for each returned group.
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of result items to return, from 1 through 1000.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        "200":
+          description: Stored file groups and their members.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /recent:
+    get:
+      operationId: listRecentFiles
+      summary: List recently modified indexed files
+      description: >-
+        Return current indexed file metadata sorted by stored modified_time
+        descending. This reflects the latest SQLite scan, not a live Drive query.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of result items to return, from 1 through 1000.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 20
+      responses:
+        "200":
+          description: Most recently modified indexed files.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecentResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API key
+      description: API key configured separately in the GPT Action authentication settings.
+  responses:
+    Unauthorized:
+      description: Bearer authentication is missing or invalid.
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: The requested indexed folder was not found.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ValidationError:
+      description: A query or path parameter failed validation.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: "#/components/schemas/ErrorResponse"
+              - $ref: "#/components/schemas/HTTPValidationError"
+    ServiceUnavailable:
+      description: Authentication configuration or the SQLite index is unavailable.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    StatusResponse:
+      type: object
+      required:
+        - files_count
+        - folders_count
+        - groups_count
+        - auto_delete_count
+        - latest_scan_id
+        - latest_scan_status
+      properties:
+        files_count:
+          type: integer
+        folders_count:
+          type: integer
+        groups_count:
+          type: integer
+        auto_delete_count:
+          type: integer
+        latest_scan_id:
+          type:
+            - string
+            - "null"
+        latest_scan_status:
+          type:
+            - string
+            - "null"
+    FileItem:
+      type: object
+      required:
+        - file_id
+        - name
+        - path
+        - extension
+        - modified_time
+        - revision_type
+        - revision_number
+        - copy_type
+        - copy_number
+        - auto_action
+        - group_id
+      properties:
+        file_id:
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+        extension:
+          type:
+            - string
+            - "null"
+        modified_time:
+          type:
+            - string
+            - "null"
+        revision_type:
+          type:
+            - string
+            - "null"
+        revision_number:
+          type:
+            - integer
+            - "null"
+        copy_type:
+          type:
+            - string
+            - "null"
+        copy_number:
+          type:
+            - integer
+            - "null"
+        auto_action:
+          type: string
+        group_id:
+          type:
+            - string
+            - "null"
+    FileSearchResponse:
+      type: object
+      required: [query, total, showing, items]
+      properties:
+        query:
+          type: string
+        total:
+          type: integer
+        showing:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileItem"
+    FolderItem:
+      type: object
+      required: [folder_id, name, path, parent_id]
+      properties:
+        folder_id:
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+        parent_id:
+          type:
+            - string
+            - "null"
+    FolderSearchResponse:
+      type: object
+      required: [query, total, showing, items]
+      properties:
+        query:
+          type: string
+        total:
+          type: integer
+        showing:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/FolderItem"
+    ChildItem:
+      type: object
+      required: [item_type, item_id, name, path, parent_id]
+      properties:
+        item_type:
+          type: string
+        item_id:
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+        parent_id:
+          type:
+            - string
+            - "null"
+        extension:
+          type:
+            - string
+            - "null"
+          default: null
+        modified_time:
+          type:
+            - string
+            - "null"
+          default: null
+    FolderChildrenResponse:
+      type: object
+      required: [folder_id, recursive, total, showing, items]
+      properties:
+        folder_id:
+          type: string
+        recursive:
+          type: boolean
+        total:
+          type: integer
+        showing:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChildItem"
+    TreeResponse:
+      type: object
+      required: [root_folder, max_depth, include_files, folder_count, file_count, tree_text]
+      properties:
+        root_folder:
+          type:
+            - string
+            - "null"
+        max_depth:
+          type:
+            - integer
+            - "null"
+        include_files:
+          type: boolean
+        folder_count:
+          type: integer
+        file_count:
+          type: integer
+        tree_text:
+          type: string
+    RevisionItem:
+      type: object
+      required: [file_id, name, path, revision_number, group_id, latest_revision_number]
+      properties:
+        file_id:
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+        revision_number:
+          type:
+            - integer
+            - "null"
+        group_id:
+          type:
+            - string
+            - "null"
+        latest_revision_number:
+          type:
+            - integer
+            - "null"
+    RevisionResponse:
+      type: object
+      required: [min_revision, total, showing, items]
+      properties:
+        min_revision:
+          type:
+            - integer
+            - "null"
+        total:
+          type: integer
+        showing:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/RevisionItem"
+    CopyItem:
+      type: object
+      required: [file_id, name, path, copy_type, copy_number, auto_action, group_id]
+      properties:
+        file_id:
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+        copy_type:
+          type: string
+        copy_number:
+          type:
+            - integer
+            - "null"
+        auto_action:
+          type: string
+        group_id:
+          type:
+            - string
+            - "null"
+    CopyResponse:
+      type: object
+      required: [total, showing, items]
+      properties:
+        total:
+          type: integer
+        showing:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CopyItem"
+    AutoDeleteResponse:
+      allOf:
+        - $ref: "#/components/schemas/CopyResponse"
+        - type: object
+          required: [classification_only, drive_action_executed]
+          properties:
+            classification_only:
+              type: boolean
+              const: true
+            drive_action_executed:
+              type: boolean
+              const: false
+    GroupMember:
+      type: object
+      required: [group_id, file_id, name, member_type, revision_number, copy_number, auto_action]
+      properties:
+        group_id:
+          type: string
+        file_id:
+          type: string
+        name:
+          type: string
+        member_type:
+          type: string
+        revision_number:
+          type:
+            - integer
+            - "null"
+        copy_number:
+          type:
+            - integer
+            - "null"
+        auto_action:
+          type: string
+    GroupItem:
+      type: object
+      required:
+        - group_id
+        - parent_id
+        - folder_path
+        - group_base_name
+        - extension
+        - member_count
+        - revision_count
+        - copy_count
+        - auto_delete_count
+        - latest_revision_number
+        - members
+      properties:
+        group_id:
+          type: string
+        parent_id:
+          type:
+            - string
+            - "null"
+        folder_path:
+          type: string
+        group_base_name:
+          type: string
+        extension:
+          type:
+            - string
+            - "null"
+        member_count:
+          type: integer
+        revision_count:
+          type: integer
+        copy_count:
+          type: integer
+        auto_delete_count:
+          type: integer
+        latest_revision_number:
+          type:
+            - integer
+            - "null"
+        members:
+          type: array
+          items:
+            $ref: "#/components/schemas/GroupMember"
+    GroupResponse:
+      type: object
+      required: [min_members, total, showing, items]
+      properties:
+        min_members:
+          type: integer
+        total:
+          type: integer
+        showing:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/GroupItem"
+    RecentItem:
+      type: object
+      required: [file_id, name, path, modified_time]
+      properties:
+        file_id:
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+        modified_time:
+          type:
+            - string
+            - "null"
+    RecentResponse:
+      type: object
+      required: [total, showing, items]
+      properties:
+        total:
+          type: integer
+        showing:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecentItem"
+    ErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+    HTTPValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            $ref: "#/components/schemas/ValidationErrorItem"
+    ValidationErrorItem:
+      type: object
+      required: [loc, msg, type]
+      properties:
+        loc:
+          type: array
+          items:
+            anyOf:
+              - type: string
+              - type: integer
+        msg:
+          type: string
+        type:
+          type: string
