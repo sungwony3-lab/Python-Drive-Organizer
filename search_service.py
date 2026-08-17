@@ -23,6 +23,18 @@ class TreeResult:
     file_ids: set[str]
 
 
+@dataclass
+class FullTreeResult:
+    items: list[dict]
+    lines: list[str]
+    folder_ids: set[str]
+    file_ids: set[str]
+
+    @property
+    def text(self) -> str:
+        return "\n".join(self.lines)
+
+
 def stable_name_key(item: dict) -> tuple[str, str, str]:
     return (
         (item.get("name") or "").casefold(),
@@ -406,19 +418,23 @@ class SearchService:
         items.sort(key=lambda item: (item["path"].casefold(), item["item_id"]))
         return SearchResult(len(items), items[:limit])
 
-    def render_tree(
+    def build_full_tree(
         self,
         root_folder_id: str | None = None,
         max_depth: int | None = None,
         include_files: bool = False,
-    ) -> TreeResult:
+    ) -> FullTreeResult:
         if root_folder_id is not None and root_folder_id not in self.folder_index.folders:
             raise ValueError(f"root folder를 찾을 수 없습니다: {root_folder_id}")
 
         files_by_parent: dict[str | None, list[dict]] = {}
         if include_files:
             for row in self.connection.execute(
-                "SELECT file_id, name, parent_id FROM files"
+                """
+                SELECT file_id, name, parent_id, mime_type, modified_time,
+                       extension
+                FROM files
+                """
             ):
                 file = dict(row)
                 files_by_parent.setdefault(file.get("parent_id"), []).append(file)
@@ -426,6 +442,7 @@ class SearchService:
                 files.sort(key=stable_name_key)
 
         lines = []
+        items: list[dict] = []
         folder_ids: set[str] = set()
         file_ids: set[str] = set()
 
@@ -463,6 +480,21 @@ class SearchService:
                     lines.append(
                         f"{current_prefix}{connector}[FILE] {item['name']}"
                     )
+                    items.append(
+                        {
+                            "node_type": "FILE",
+                            "name": item["name"],
+                            "level": current_depth,
+                            "path": self.folder_index.file_path(
+                                item.get("parent_id"), item["name"]
+                            ),
+                            "parent_id": item.get("parent_id"),
+                            "id": item["file_id"],
+                            "mime_type": item.get("mime_type"),
+                            "modified_time": item.get("modified_time"),
+                            "extension": item.get("extension"),
+                        }
+                    )
                     continue
 
                 folder_id = item["folder_id"]
@@ -470,6 +502,19 @@ class SearchService:
                     continue
                 folder_ids.add(folder_id)
                 lines.append(f"{current_prefix}{connector}{item['name']}")
+                items.append(
+                    {
+                        "node_type": "FOLDER",
+                        "name": item["name"],
+                        "level": current_depth,
+                        "path": self.folder_index.folder_path(folder_id),
+                        "parent_id": item.get("parent_id"),
+                        "id": folder_id,
+                        "mime_type": None,
+                        "modified_time": None,
+                        "extension": None,
+                    }
+                )
                 stack.append(
                     (
                         child_entries(folder_id),
@@ -495,6 +540,19 @@ class SearchService:
             root = self.folder_index.folders[root_folder_id]
             lines.append(root["name"])
             folder_ids.add(root_folder_id)
+            items.append(
+                {
+                    "node_type": "FOLDER",
+                    "name": root["name"],
+                    "level": 0,
+                    "path": self.folder_index.folder_path(root_folder_id),
+                    "parent_id": root.get("parent_id"),
+                    "id": root_folder_id,
+                    "mime_type": None,
+                    "modified_time": None,
+                    "extension": None,
+                }
+            )
             append_children(root_folder_id, "", 1)
         else:
             lines.append("Google Drive")
@@ -527,6 +585,19 @@ class SearchService:
                         continue
                     folder_ids.add(folder_id)
                     lines.append(f"└─ {folder['name']} [folder_id={folder_id}]")
+                    items.append(
+                        {
+                            "node_type": "FOLDER",
+                            "name": folder["name"],
+                            "level": 1,
+                            "path": self.folder_index.folder_path(folder_id),
+                            "parent_id": folder.get("parent_id"),
+                            "id": folder_id,
+                            "mime_type": None,
+                            "modified_time": None,
+                            "extension": None,
+                        }
+                    )
                     append_children(folder_id, "   ", 1)
 
             if include_files:
@@ -541,4 +612,17 @@ class SearchService:
                     lines.append(f"[FILES WITH MISSING PARENT: {parent_id}]")
                     append_children(parent_id, "", 1)
 
-        return TreeResult("\n".join(lines), folder_ids, file_ids)
+        return FullTreeResult(items, lines, folder_ids, file_ids)
+
+    def render_tree(
+        self,
+        root_folder_id: str | None = None,
+        max_depth: int | None = None,
+        include_files: bool = False,
+    ) -> TreeResult:
+        result = self.build_full_tree(
+            root_folder_id=root_folder_id,
+            max_depth=max_depth,
+            include_files=include_files,
+        )
+        return TreeResult(result.text, result.folder_ids, result.file_ids)

@@ -1,14 +1,21 @@
 openapi: 3.1.0
 info:
-  title: Python Drive Organizer Read-Only Index API
-  version: 1.2-MVP04
+  title: Python Drive Organizer API
+  version: 1.7-MVP01.1
   description: >-
-    Read-only access to a SQLite index of Google Drive file and folder metadata.
-    This API does not read file contents, call Google Drive during requests, or
-    create, update, move, copy, trash, or delete Drive items.
+    Read-only operations access a SQLite index of Google Drive file and folder
+    metadata, including paged Tree viewing and authenticated TXT/DOCX/XLSX
+    export. Contacts operations access the SQLite address-book snapshot. Plain
+    email has a read-only preview and confirmed
+    text-only send with no Drive calls. The legacy confirmed operation sends
+    one exact Drive blob as an attachment. Enhanced email uses a read-only
+    preview followed by a confirmed send of 1-5 attachments or Drive links.
+    Link send may create only non-discoverable anyone/reader permissions after
+    warning that a forwarded link remains accessible. No operation creates,
+    updates, moves, copies, trashes, or deletes Drive items.
 servers:
   - url: https://drive-api.sungwony.pe.kr
-    description: Cloudflare HTTPS endpoint for the local read-only index API
+    description: Cloudflare HTTPS endpoint for Python Drive Organizer
 security:
   - BearerAuth: []
 paths:
@@ -193,6 +200,108 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+  /folders/tree/page:
+    post:
+      operationId: getDriveTreePage
+      summary: Page through the complete indexed Drive tree
+      description: >-
+        Return deterministic SQLite tree nodes. Continue with the exact opaque
+        next_cursor until it is null. No Google Drive call is made.
+      x-openai-isConsequential: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TreePageRequest"
+      responses:
+        "200":
+          description: One stable page of indexed Drive tree nodes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TreePageResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The SQLite snapshot changed; restart from the first page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /exports/drive-tree:
+    post:
+      operationId: exportDriveTree
+      summary: Export the complete indexed Drive tree
+      description: >-
+        Generate one TXT, DOCX, or XLSX from the complete SQLite tree. The
+        server builds the document without GPT assembling paged nodes.
+      x-openai-isConsequential: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TreeExportRequest"
+      responses:
+        "200":
+          description: Export metadata and opaque ID for authenticated download.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TreeExportResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /exports/{export_id}/openai-file:
+    post:
+      operationId: returnDriveTreeExport
+      summary: Return a Drive tree export to the GPT conversation
+      description: >-
+        Return the generated file as openaiFileResponse using the exact
+        export_id from exportDriveTree. Never invent or alter the ID.
+      x-openai-isConsequential: false
+      parameters:
+        - name: export_id
+          in: path
+          required: true
+          description: Exact opaque export ID returned by exportDriveTree.
+          schema:
+            type: string
+            minLength: 32
+            maxLength: 32
+      responses:
+        "200":
+          description: GPT Actions conversation-file response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenAIFileResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          description: The generated file exceeds the 10 MB GPT file limit.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /revisions:
     get:
       operationId: listRevisions
@@ -361,6 +470,361 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+  /contacts/search:
+    post:
+      operationId: searchContacts
+      summary: Search the SQLite contact directory
+      description: >-
+        Search current SQLite contacts by free text or exact organization,
+        name, title, or email filters. Use this for name-based recipients.
+      x-openai-isConsequential: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContactSearchRequest"
+      responses:
+        "200":
+          description: Ranked matching contacts from the SQLite snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContactSearchResponse"
+        "400":
+          description: At least one non-empty search criterion is required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContactErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /contacts/status:
+    get:
+      operationId: getContactsStatus
+      summary: Get Contacts synchronization status
+      description: >-
+        Return the latest Contacts sync status, last successful completion
+        time, and row statistics from SQLite. This does not refresh Contacts.
+      x-openai-isConsequential: false
+      responses:
+        "200":
+          description: Latest Contacts synchronization state and statistics.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContactsStatusResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /contacts/{contact_id}:
+    get:
+      operationId: getContact
+      summary: Get one contact by exact ID
+      description: >-
+        Re-read one exact contact_id immediately before email preview. Never
+        substitute a name match or an invented ID when this lookup fails.
+      x-openai-isConsequential: false
+      parameters:
+        - name: contact_id
+          in: path
+          required: true
+          description: Exact opaque contact_id returned by searchContacts.
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Exact current contact from the SQLite snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContactItem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: The exact contact_id no longer exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContactErrorResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /email/send-file:
+    post:
+      operationId: sendEmailWithAttachment
+      summary: Send one Drive file as a Gmail attachment
+      description: >-
+        Requires an exact Drive file_id obtained from the user or a previous
+        read-only search Action. Call only after the user explicitly confirms
+        the recipient, subject, plain-text body, and attachment. Sends one
+        attachment to one recipient and causes an actual external email send.
+      x-openai-isConsequential: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailSendRequest"
+      responses:
+        "200":
+          description: >-
+            Gmail accepted the message, or the same successful idempotency key
+            was replayed without another Gmail send.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailSendResponse"
+        "400":
+          description: Confirmation, recipient, attachment type, or size is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: The exact file_id is absent from SQLite or Google Drive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "409":
+          description: >-
+            Idempotency conflict, prior pending state, or uncertain Gmail
+            delivery. Do not retry automatically.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "502":
+          description: Drive download or Gmail send failed upstream.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "503":
+          description: OAuth, Gmail API, or SQLite index is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+  /email/send-text/preview:
+    post:
+      operationId: previewTextEmail
+      summary: Preview a plain-text email without sending
+      description: >-
+        Validate one To, up to five CC addresses, a one-line subject, and a
+        plain-text body. Returns a short-lived preview without Gmail, Drive,
+        permission, attachment, or Google Sheets calls.
+      x-openai-isConsequential: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TextEmailPreviewRequest"
+      responses:
+        "200":
+          description: Short-lived plain-text email preview requiring approval.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TextEmailPreviewResponse"
+        "400":
+          description: Recipient, CC, subject, or body is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          description: Persistent preview state is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+  /email/send-text:
+    post:
+      operationId: sendTextEmail
+      summary: Send one confirmed plain-text email
+      description: >-
+        After explicit approval, send the unchanged payload using exactly the
+        preview_id returned by the immediately preceding successful
+        previewTextEmail call. Never invent or substitute it. No files, Drive
+        links, or Drive writes. Never retry automatically.
+      x-openai-isConsequential: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TextEmailSendRequest"
+      responses:
+        "200":
+          description: Gmail accepted the message or returned an idempotent replay.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TextEmailSendResponse"
+        "400":
+          description: Confirmation, recipient, CC, subject, body, or key is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: The exact preview_id does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "409":
+          description: >-
+            Preview expired or changed, idempotency conflict, pending state, or
+            uncertain delivery. Do not retry automatically.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "502":
+          description: Gmail rejected the send request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "503":
+          description: Gmail OAuth, Gmail API, or persistent state is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+  /email/send-files/preview:
+    post:
+      operationId: previewEmailWithFiles
+      summary: Preview an enhanced email without sending or sharing
+      description: >-
+        Preview 1-5 indexed files for one To and up to five CC addresses.
+        Resolve attachment, link, or auto mode and return ordered files plus
+        file-level anyone/reader sharing changes. Read-only: no download,
+        permission creation, or Gmail send.
+      x-openai-isConsequential: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnhancedEmailPreviewRequest"
+      responses:
+        "200":
+          description: Short-lived read-only enhanced email preview.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnhancedEmailPreviewResponse"
+        "400":
+          description: Recipient, CC, file list, mode, attachment, or link plan is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: An exact file ID is absent from SQLite or Google Drive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "502":
+          description: Drive metadata or permission listing failed upstream.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "503":
+          description: Drive OAuth or the SQLite index is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+  /email/send-files:
+    post:
+      operationId: sendEmailWithFiles
+      summary: Send one confirmed enhanced email
+      description: >-
+        After explicit approval, send using exactly the preview_id from the
+        immediately preceding successful previewEmailWithFiles call for the
+        same payload; never invent or substitute it. Sends 1-5 attachments or
+        Drive links. Consequential; never retry automatically.
+      x-openai-isConsequential: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnhancedEmailSendRequest"
+      responses:
+        "200":
+          description: Gmail accepted the message, or a completed idempotent result was replayed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnhancedEmailSendResponse"
+        "400":
+          description: Confirmation, payload, mode, attachment, or link plan is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: A preview or exact file ID is absent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "409":
+          description: >-
+            Preview expired or changed, idempotency conflict, permission partial
+            failure, pending state, or uncertain delivery. Do not retry automatically.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "502":
+          description: Drive download, permission creation, or Gmail send failed upstream.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "503":
+          description: Drive/Gmail OAuth, Gmail API, or SQLite state is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
 components:
   securitySchemes:
     BearerAuth:
@@ -581,6 +1045,212 @@ components:
           type: integer
         tree_text:
           type: string
+    TreeNodeItem:
+      type: object
+      additionalProperties: false
+      required:
+        - node_type
+        - name
+        - level
+        - path
+        - parent_id
+        - id
+        - mime_type
+        - modified_time
+        - extension
+      properties:
+        node_type:
+          type: string
+          enum: [FOLDER, FILE]
+        name:
+          type: string
+        level:
+          type: integer
+          minimum: 0
+        path:
+          type: string
+        parent_id:
+          type:
+            - string
+            - "null"
+        id:
+          type: string
+        mime_type:
+          type:
+            - string
+            - "null"
+        modified_time:
+          type:
+            - string
+            - "null"
+        extension:
+          type:
+            - string
+            - "null"
+    TreePageRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        root_folder:
+          type:
+            - string
+            - "null"
+          description: Exact folder_id for a subtree, or null for the full Drive.
+        include_files:
+          type: boolean
+          default: false
+        max_depth:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+        page_size:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 500
+        cursor:
+          type:
+            - string
+            - "null"
+          description: Exact next_cursor from the preceding page, or null initially.
+    TreePageResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - total_nodes
+        - showing
+        - next_cursor
+        - has_more
+        - items
+        - latest_scan_id
+        - latest_scan_status
+        - scan_finished_at
+      properties:
+        total_nodes:
+          type: integer
+          minimum: 0
+        showing:
+          type: integer
+          minimum: 0
+        next_cursor:
+          type:
+            - string
+            - "null"
+        has_more:
+          type: boolean
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/TreeNodeItem"
+        latest_scan_id:
+          type:
+            - string
+            - "null"
+        latest_scan_status:
+          type:
+            - string
+            - "null"
+        scan_finished_at:
+          type:
+            - string
+            - "null"
+    TreeExportRequest:
+      type: object
+      additionalProperties: false
+      required: [format]
+      properties:
+        format:
+          type: string
+          enum: [txt, docx, xlsx]
+        root_folder:
+          type:
+            - string
+            - "null"
+          description: Exact folder_id for a subtree, or null for the full Drive.
+        include_files:
+          type: boolean
+          default: true
+        max_depth:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+    TreeExportResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - export_id
+        - format
+        - filename
+        - node_count
+        - folder_count
+        - file_count
+        - latest_scan_id
+        - latest_scan_status
+        - scan_finished_at
+        - created_at
+        - download_endpoint
+      properties:
+        export_id:
+          type: string
+        format:
+          type: string
+          enum: [txt, docx, xlsx]
+        filename:
+          type: string
+        node_count:
+          type: integer
+          minimum: 0
+        folder_count:
+          type: integer
+          minimum: 0
+        file_count:
+          type: integer
+          minimum: 0
+        latest_scan_id:
+          type:
+            - string
+            - "null"
+        latest_scan_status:
+          type:
+            - string
+            - "null"
+        scan_finished_at:
+          type:
+            - string
+            - "null"
+        created_at:
+          type: string
+        download_endpoint:
+          type: string
+          description: Raw API-client path. GPT must call returnDriveTreeExport instead.
+    OpenAIFileItem:
+      type: object
+      additionalProperties: false
+      required: [name, mime_type, content]
+      properties:
+        name:
+          type: string
+          description: Actual generated filename shown to the GPT user.
+        mime_type:
+          type: string
+          description: MIME type matching the TXT, DOCX, or XLSX export.
+        content:
+          type: string
+          format: byte
+          description: Base64-encoded bytes of the generated export.
+    OpenAIFileResponse:
+      type: object
+      additionalProperties: false
+      required: [openaiFileResponse]
+      properties:
+        openaiFileResponse:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/OpenAIFileItem"
     RevisionItem:
       type: object
       required: [file_id, name, path, revision_number, group_id, latest_revision_number]
@@ -772,6 +1442,623 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/RecentItem"
+    ContactSearchRequest:
+      type: object
+      additionalProperties: false
+      description: >-
+        Supply q or at least one exact filter. q and filters are combined with
+        AND. Blank criteria are rejected by the API.
+      properties:
+        q:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          description: Text matched against normalized name, organization, title, and email.
+        organization:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          description: Optional normalized exact organization filter.
+        name:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          description: Optional normalized exact name filter.
+        title:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          description: Optional normalized exact title filter.
+        email:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          description: Optional case-insensitive exact email filter.
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+          description: Maximum number of contacts to return.
+    ContactItem:
+      type: object
+      additionalProperties: false
+      required:
+        - contact_id
+        - organization
+        - name
+        - title
+        - email
+        - phone
+        - email_usable
+        - conflict_code
+      properties:
+        contact_id:
+          type: string
+          description: Exact opaque ID to preserve and re-read before preview.
+        organization:
+          type:
+            - string
+            - "null"
+        name:
+          type: string
+        title:
+          type:
+            - string
+            - "null"
+        email:
+          type:
+            - string
+            - "null"
+        phone:
+          type:
+            - string
+            - "null"
+        email_usable:
+          type: boolean
+          description: False means this contact must not be used for email delivery.
+        conflict_code:
+          type:
+            - string
+            - "null"
+          description: A non-null conflict blocks automatic email use.
+    ContactSearchResponse:
+      type: object
+      additionalProperties: false
+      required: [total, showing, items]
+      properties:
+        total:
+          type: integer
+          minimum: 0
+        showing:
+          type: integer
+          minimum: 0
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContactItem"
+    ContactsStatusResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - latest_sync_id
+        - latest_sync_status
+        - last_success_at
+        - rows_seen
+        - valid_rows
+        - inserted
+        - updated
+        - deleted
+        - unchanged
+        - invalid
+        - conflicts
+      properties:
+        latest_sync_id:
+          type:
+            - string
+            - "null"
+        latest_sync_status:
+          type:
+            - string
+            - "null"
+        last_success_at:
+          type:
+            - string
+            - "null"
+        rows_seen:
+          type: integer
+          minimum: 0
+        valid_rows:
+          type: integer
+          minimum: 0
+        inserted:
+          type: integer
+          minimum: 0
+        updated:
+          type: integer
+          minimum: 0
+        deleted:
+          type: integer
+          minimum: 0
+        unchanged:
+          type: integer
+          minimum: 0
+        invalid:
+          type: integer
+          minimum: 0
+        conflicts:
+          type: integer
+          minimum: 0
+    ContactErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [detail]
+      properties:
+        detail:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+    EmailSendRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - file_id
+        - to
+        - subject
+        - body
+        - confirmed
+        - idempotency_key
+      properties:
+        file_id:
+          type: string
+          minLength: 1
+          description: Exact Drive file ID selected from a read-only search result.
+        to:
+          type: string
+          minLength: 3
+          description: Exactly one user-confirmed recipient email address.
+        subject:
+          type: string
+          minLength: 1
+          maxLength: 998
+          description: User-confirmed one-line email subject.
+        body:
+          type: string
+          description: User-confirmed plain-text email body.
+        confirmed:
+          type: boolean
+          enum:
+            - true
+          description: Must be true only after explicit final user confirmation.
+        idempotency_key:
+          type: string
+          minLength: 8
+          maxLength: 128
+          pattern: "^[A-Za-z0-9._:-]{8,128}$"
+          description: >-
+            New low-collision key for a new approval. Reuse the same key only
+            for a transport retry of that exact unchanged approval.
+    EmailSendResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - message_id
+        - file_id
+        - file_name
+        - recipient
+        - idempotent_replay
+      properties:
+        status:
+          type: string
+          enum:
+            - sent
+        message_id:
+          type: string
+          minLength: 1
+          description: Gmail message ID proving Gmail accepted the message.
+        file_id:
+          type: string
+        file_name:
+          type: string
+        recipient:
+          type: string
+        idempotent_replay:
+          type: boolean
+          description: True when an existing successful result was returned without resending.
+    TextEmailPreviewRequest:
+      type: object
+      additionalProperties: false
+      required: [to, cc, subject, body]
+      properties:
+        to:
+          type: string
+          minLength: 3
+          description: Exactly one proposed primary recipient email address.
+        cc:
+          type: array
+          maxItems: 5
+          description: Zero to five proposed CC addresses.
+          items:
+            type: string
+            minLength: 3
+        subject:
+          type: string
+          minLength: 1
+          maxLength: 998
+          description: Proposed one-line email subject.
+        body:
+          type: string
+          description: Proposed plain-text body. No attachment or Drive link is added.
+    TextEmailSendRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - preview_id
+        - to
+        - cc
+        - subject
+        - body
+        - confirmed
+        - idempotency_key
+      properties:
+        preview_id:
+          type: string
+          minLength: 1
+          description: >-
+            Use exactly the preview_id returned by the immediately preceding
+            successful previewTextEmail call for the same unchanged payload.
+            Never invent or substitute it.
+        to:
+          type: string
+          minLength: 3
+        cc:
+          type: array
+          maxItems: 5
+          items:
+            type: string
+            minLength: 3
+        subject:
+          type: string
+          minLength: 1
+          maxLength: 998
+        body:
+          type: string
+        confirmed:
+          type: boolean
+          enum: [true]
+          description: True only after explicit confirmation of the unchanged preview.
+        idempotency_key:
+          type: string
+          minLength: 8
+          maxLength: 128
+          pattern: "^[A-Za-z0-9._:-]{8,128}$"
+          description: New low-collision key for this newly approved send.
+    TextEmailPreviewResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - preview_id
+        - expires_at
+        - recipient
+        - cc
+        - subject
+        - body
+        - attachment_count
+        - drive_link_count
+      properties:
+        preview_id:
+          type: string
+        expires_at:
+          type: string
+        recipient:
+          type: string
+        cc:
+          type: array
+          items:
+            type: string
+        subject:
+          type: string
+        body:
+          type: string
+        attachment_count:
+          type: integer
+          const: 0
+        drive_link_count:
+          type: integer
+          const: 0
+    TextEmailSendResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - message_id
+        - recipient
+        - cc
+        - attachment_count
+        - drive_link_count
+        - idempotent_replay
+      properties:
+        status:
+          type: string
+          enum: [sent]
+        message_id:
+          type: string
+          minLength: 1
+        recipient:
+          type: string
+        cc:
+          type: array
+          items:
+            type: string
+        attachment_count:
+          type: integer
+          const: 0
+        drive_link_count:
+          type: integer
+          const: 0
+        idempotent_replay:
+          type: boolean
+    EnhancedEmailPreviewRequest:
+      type: object
+      additionalProperties: false
+      required: [file_ids, to, cc, subject, body, mode]
+      properties:
+        file_ids:
+          type: array
+          minItems: 1
+          maxItems: 5
+          uniqueItems: true
+          description: Ordered, duplicate-free exact Drive file IDs from search results.
+          items:
+            type: string
+            minLength: 1
+        to:
+          type: string
+          minLength: 3
+          description: Exactly one user-confirmed primary recipient.
+        cc:
+          type: array
+          maxItems: 5
+          description: Zero to five CC addresses; duplicates and To matches are normalized away.
+          items:
+            type: string
+            minLength: 3
+        subject:
+          type: string
+          minLength: 1
+          maxLength: 998
+          description: Proposed one-line email subject.
+        body:
+          type: string
+          description: Proposed plain-text body; file links are appended in link mode.
+        mode:
+          type: string
+          enum: [auto, attachment, link]
+          description: Requested delivery mode. Forced attachment never silently falls back to link.
+    EnhancedEmailSendRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - preview_id
+        - file_ids
+        - to
+        - cc
+        - subject
+        - body
+        - mode
+        - confirmed
+        - idempotency_key
+      properties:
+        preview_id:
+          type: string
+          minLength: 1
+          description: >-
+            Use exactly the preview_id returned by the immediately preceding
+            successful previewEmailWithFiles call for the same payload. Never
+            invent or substitute it.
+        file_ids:
+          type: array
+          minItems: 1
+          maxItems: 5
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+        to:
+          type: string
+          minLength: 3
+        cc:
+          type: array
+          maxItems: 5
+          items:
+            type: string
+            minLength: 3
+        subject:
+          type: string
+          minLength: 1
+          maxLength: 998
+        body:
+          type: string
+        mode:
+          type: string
+          enum: [auto, attachment, link]
+        confirmed:
+          type: boolean
+          enum: [true]
+          description: True only after explicit confirmation of the unchanged preview.
+        idempotency_key:
+          type: string
+          minLength: 8
+          maxLength: 128
+          pattern: "^[A-Za-z0-9._:-]{8,128}$"
+          description: New low-collision key for this newly approved send.
+    EnhancedEmailFile:
+      type: object
+      additionalProperties: false
+      required: [file_id, name, mime_type, size_bytes]
+      properties:
+        file_id:
+          type: string
+        name:
+          type: string
+        mime_type:
+          type:
+            - string
+            - "null"
+        size_bytes:
+          type:
+            - integer
+            - "null"
+        delivery:
+          type:
+            - string
+            - "null"
+          enum: [attachment, link, null]
+    EnhancedSharingChange:
+      type: object
+      additionalProperties: false
+      required: [file_id, action, permission_type, role, allow_file_discovery]
+      properties:
+        file_id:
+          type: string
+        action:
+          type: string
+          enum: [existing, create_anyone_reader, created]
+        permission_type:
+          type: string
+          const: anyone
+        role:
+          type: string
+          const: reader
+        allow_file_discovery:
+          type: boolean
+          const: false
+    EnhancedEmailPreviewResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - preview_id
+        - expires_at
+        - requested_mode
+        - delivery_mode
+        - sharing_mode
+        - file_count
+        - total_size_bytes
+        - files
+        - recipient
+        - cc
+        - sharing_changes
+      properties:
+        preview_id:
+          type: string
+        expires_at:
+          type: string
+        requested_mode:
+          type: string
+          enum: [auto, attachment, link]
+        delivery_mode:
+          type: string
+          enum: [attachment, link]
+        sharing_mode:
+          type: string
+          enum: [none, anyone_with_link_reader]
+          description: >-
+            Link mode means anyone who receives the webViewLink can view the
+            file without being a named Drive permission recipient.
+        file_count:
+          type: integer
+          minimum: 1
+          maximum: 5
+        total_size_bytes:
+          type:
+            - integer
+            - "null"
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/EnhancedEmailFile"
+        recipient:
+          type: string
+        cc:
+          type: array
+          items:
+            type: string
+        sharing_changes:
+          type: array
+          items:
+            $ref: "#/components/schemas/EnhancedSharingChange"
+    EnhancedEmailSendResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - delivery_mode
+        - sharing_mode
+        - file_count
+        - files
+        - recipient
+        - cc
+        - message_id
+        - sharing_changes
+        - idempotent_replay
+      properties:
+        status:
+          type: string
+          enum: [sent]
+        delivery_mode:
+          type: string
+          enum: [attachment, link]
+        sharing_mode:
+          type: string
+          enum: [none, anyone_with_link_reader]
+        file_count:
+          type: integer
+          minimum: 1
+          maximum: 5
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/EnhancedEmailFile"
+        recipient:
+          type: string
+        cc:
+          type: array
+          items:
+            type: string
+        message_id:
+          type: string
+          minLength: 1
+        sharing_changes:
+          type: array
+          items:
+            $ref: "#/components/schemas/EnhancedSharingChange"
+        idempotent_replay:
+          type: boolean
+    EmailErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          $ref: "#/components/schemas/EmailErrorDetail"
+    EmailErrorDetail:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
     ErrorResponse:
       type: object
       required: [detail]

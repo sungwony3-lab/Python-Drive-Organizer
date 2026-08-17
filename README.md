@@ -107,6 +107,23 @@ python -m uvicorn api_server:app --host 127.0.0.1 --port 8000
 - `/files/search`, `/folders/search`
 - `/folders/{folder_id}/children`, `/folders/tree`
 - `/revisions`, `/copies`, `/auto-delete`, `/groups`, `/recent`
+- `/exports/{export_id}`: Bearer 인증된 Tree export 다운로드
+
+Project 1-7 Drive Tree endpoint:
+
+- `POST /folders/tree/page`: 최대 1000개씩 opaque cursor pagination
+- `POST /exports/drive-tree`: SQLite 전체 Tree를 TXT/DOCX/XLSX로 생성
+- `GET /exports/{export_id}`: 추측하기 어려운 export ID로 인증 다운로드
+- `POST /exports/{export_id}/openai-file`: GPT Actions용 `openaiFileResponse` 반환
+
+Tree pagination은 `next_cursor=null`이 될 때까지 직전 cursor를 그대로
+전달합니다. Export는 GPT가 수천 개 노드를 조립하지 않고 Python 서버가
+`data/drive_index.db`의 한 SQLite snapshot에서 전체 문서를 생성합니다.
+생성 파일은 `exports/`에 저장되며 Git에서 제외됩니다. 모든 Tree endpoint는
+Google Drive API를 호출하거나 Drive 항목을 변경하지 않습니다.
+GPT는 raw binary GET을 호출하지 않고 `exportDriveTree`가 반환한 exact
+`export_id`로 `returnDriveTreeExport`를 호출합니다. 반환 전 원본 파일 크기가
+10 MB를 넘으면 `GPT_FILE_TOO_LARGE`로 중단하며 base64를 생성하지 않습니다.
 
 보호 endpoint 요청 형식:
 
@@ -137,11 +154,51 @@ Stop-ScheduledTask -TaskName "Python Drive Organizer API"
 
 Cloudflare Tunnel은 기존 Windows 서비스 구성을 사용합니다. Task Scheduler 작업이나 API 명령에 API key 또는 Tunnel token을 넣지 않습니다.
 
+### Google Drive Index Daily Refresh
+
+별도 Windows Task Scheduler 작업 `Python Drive Organizer Daily Refresh`가 매일 Windows 로컬 시간 오전 08:00에 다음 명령을 실행합니다.
+
+```text
+Program: C:\Users\HLB\Documents\Python-Drive-Organizer\.venv\Scripts\python.exe
+Arguments: daily_refresh.py
+Start in: C:\Users\HLB\Documents\Python-Drive-Organizer
+```
+
+Daily Refresh는 다음 순서를 지키며 앞 단계가 실패하면 이후 단계를 실행하지 않습니다.
+
+```text
+Drive metadata sync → filename Parser → File Grouping
+```
+
+세 단계가 모두 성공한 뒤에만 해당 `scan_state`를 `COMPLETED`로 기록합니다. 실패 시 로그를 남기고 한 번 종료하며 무한 재시작하지 않습니다. Google Drive는 `drive.metadata.readonly` scope로만 조회하고 SQLite 인덱스만 갱신합니다.
+
+수동 실행:
+
+```powershell
+.\.venv\Scripts\python.exe .\daily_refresh.py
+```
+
+로그 위치:
+
+```text
+logs/daily_refresh.log
+```
+
+예약 작업은 `StartWhenAvailable=True`이므로 오전 08:00에 PC를 사용할 수 없었다면 다음 사용 가능 시점에 누락 실행을 한 번 시작합니다. `MultipleInstances=IgnoreNew`로 이전 refresh가 실행 중일 때 중복 인스턴스를 만들지 않습니다.
+
+상태 확인과 수동 Run:
+
+```powershell
+Get-ScheduledTask -TaskName "Python Drive Organizer Daily Refresh"
+Get-ScheduledTaskInfo -TaskName "Python Drive Organizer Daily Refresh"
+Start-ScheduledTask -TaskName "Python Drive Organizer Daily Refresh"
+```
+
 ### GPTs Actions 준비 파일
 
 Project 1-2 MVP-04의 GPT Builder 등록용 준비 파일:
 
-- `gpt_action_openapi.yaml`: 공개 HTTPS API의 10개 read-only GET operation
+- `gpt_action_openapi.yaml`: SQLite 조회, Tree export, 연락처와 승인형 이메일 Action schema
 - `GPTS_INSTRUCTIONS.md`: SQLite Drive Index를 source of truth로 사용하는 GPT Instructions 초안
 - `GPTS_ACTION_TEST_SCENARIOS.md`: 자연어 요청과 예상 Action을 연결한 수동 종단 테스트 시나리오
 
@@ -154,3 +211,27 @@ Action schema의 server는 `https://drive-api.sungwony.pe.kr`이며 HTTP Bearer 
 ```text
 https://www.googleapis.com/auth/drive.metadata.readonly
 ```
+
+## Windows PC 이전 및 재설치
+
+포맷 전 준비:
+
+```powershell
+.\prepare_migration.ps1
+```
+
+새 PC 기본 흐름:
+
+```powershell
+.\setup_windows.ps1
+# 필요한 Google OAuth 승인을 각각 완료
+.\verify_install.ps1
+```
+
+기존 PC의 `.venv`는 복사하지 않으며 setup이 새 PC 경로에서 다시 생성합니다. `.env`, `credentials.json`, OAuth token 및 `data/*.db`는 Git에 포함되지 않으므로 별도 보안 이전 정책을 따라야 합니다.
+
+- 전체 절차: [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)
+- Google OAuth, Cloudflare connector, GPT Builder 수동 단계: [MANUAL_ONLINE_SETUP.md](MANUAL_ONLINE_SETUP.md)
+- 두 Windows 예약 작업만 제거: `uninstall_tasks.ps1 -ConfirmRemoval`
+
+`verify_install.ps1`은 실제 이메일을 보내거나 Drive permission/file을 변경하지 않습니다.

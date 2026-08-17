@@ -4,6 +4,12 @@ __pycache__/
 .env
 credentials.json
 token.json
+drive_download_token.json
+gmail_send_token.json
+drive_share_token.json
+contacts_sheet_token.json
 data/
 logs/
 drive_tree.txt
+exports/
+/Python-Drive-Organizer/

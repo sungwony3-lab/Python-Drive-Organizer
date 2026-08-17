@@ -100,6 +100,83 @@ ON file_group_members(group_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_file_group_members_file_id
 ON file_group_members(file_id);
+
+CREATE TABLE IF NOT EXISTS contacts (
+    contact_id TEXT PRIMARY KEY,
+    organization TEXT,
+    name TEXT NOT NULL,
+    title TEXT,
+    email TEXT,
+    phone TEXT,
+    normalized_organization TEXT,
+    normalized_name TEXT NOT NULL,
+    normalized_title TEXT,
+    normalized_email TEXT,
+    email_usable INTEGER NOT NULL DEFAULT 0,
+    conflict_code TEXT,
+    source_spreadsheet_id TEXT NOT NULL,
+    source_sheet_id INTEGER NOT NULL,
+    source_sheet_name TEXT NOT NULL,
+    source_row INTEGER NOT NULL,
+    source_fingerprint TEXT NOT NULL,
+    last_seen_sync_id TEXT NOT NULL,
+    synced_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(source_spreadsheet_id, source_sheet_id, source_row)
+);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_normalized_name
+ON contacts(normalized_name);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_normalized_email
+ON contacts(normalized_email);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_organization
+ON contacts(normalized_organization);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_title
+ON contacts(normalized_title);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_last_seen_sync
+ON contacts(last_seen_sync_id);
+
+CREATE TABLE IF NOT EXISTS contacts_sync_state (
+    sync_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    source_spreadsheet_id TEXT,
+    source_sheet_id INTEGER,
+    source_sheet_name TEXT,
+    rows_seen INTEGER NOT NULL DEFAULT 0,
+    valid_rows INTEGER NOT NULL DEFAULT 0,
+    inserted INTEGER NOT NULL DEFAULT 0,
+    updated INTEGER NOT NULL DEFAULT 0,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    unchanged INTEGER NOT NULL DEFAULT 0,
+    invalid INTEGER NOT NULL DEFAULT 0,
+    conflicts INTEGER NOT NULL DEFAULT 0,
+    message TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_sync_started
+ON contacts_sync_state(started_at);
+
+CREATE TABLE IF NOT EXISTS contacts_sync_issues (
+    sync_id TEXT NOT NULL,
+    source_row INTEGER NOT NULL,
+    contact_id TEXT,
+    issue_code TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    message TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(sync_id, source_row, issue_code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_sync_issues_sync
+ON contacts_sync_issues(sync_id);
 """
 
 

@@ -1,0 +1,168 @@
+openapi: 3.1.0
+info:
+  title: Python Drive Organizer Email Action
+  version: 1.3-MVP03
+  description: >-
+    Consequential email action for sending one exact indexed Google Drive blob
+    file as one Gmail attachment after explicit final user confirmation. This
+    action never creates, updates, moves, copies, trashes, or deletes Drive items.
+servers:
+  - url: https://drive-api.sungwony.pe.kr
+    description: Cloudflare HTTPS endpoint for Python Drive Organizer
+security:
+  - BearerAuth: []
+paths:
+  /email/send-file:
+    post:
+      operationId: sendEmailWithAttachment
+      summary: Send one Drive file as a Gmail attachment
+      description: >-
+        Requires an exact Drive file_id obtained from the user or a previous
+        read-only search Action. Call only after the user explicitly confirms
+        the recipient, subject, plain-text body, and attachment. Sends one
+        attachment to one recipient and causes an actual external email send.
+      x-openai-isConsequential: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailSendRequest"
+      responses:
+        "200":
+          description: >-
+            Gmail accepted the message, or the same successful idempotency key
+            was replayed without another Gmail send.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailSendResponse"
+        "400":
+          description: Confirmation, recipient, attachment type, or size is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "401":
+          description: Bearer authentication is missing or invalid.
+        "404":
+          description: The exact file_id is absent from SQLite or Google Drive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "409":
+          description: >-
+            Idempotency conflict, prior pending state, or uncertain Gmail
+            delivery. Do not retry automatically.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "422":
+          description: Request JSON does not match the strict schema.
+        "502":
+          description: Drive download or Gmail send failed upstream.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+        "503":
+          description: OAuth, Gmail API, or SQLite index is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailErrorResponse"
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API key
+      description: Bearer API key configured separately in GPT Builder.
+  schemas:
+    EmailSendRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - file_id
+        - to
+        - subject
+        - body
+        - confirmed
+        - idempotency_key
+      properties:
+        file_id:
+          type: string
+          minLength: 1
+          description: Exact Drive file ID selected from a read-only search result.
+        to:
+          type: string
+          minLength: 3
+          description: Exactly one user-confirmed recipient email address.
+        subject:
+          type: string
+          minLength: 1
+          maxLength: 998
+          description: User-confirmed one-line email subject.
+        body:
+          type: string
+          description: User-confirmed plain-text email body.
+        confirmed:
+          type: boolean
+          enum:
+            - true
+          description: Must be true only after explicit final user confirmation.
+        idempotency_key:
+          type: string
+          minLength: 8
+          maxLength: 128
+          pattern: "^[A-Za-z0-9._:-]{8,128}$"
+          description: >-
+            New low-collision key for a new approval. Reuse the same key only
+            for a transport retry of that exact unchanged approval.
+    EmailSendResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - message_id
+        - file_id
+        - file_name
+        - recipient
+        - idempotent_replay
+      properties:
+        status:
+          type: string
+          enum:
+            - sent
+        message_id:
+          type: string
+          minLength: 1
+          description: Gmail message ID proving Gmail accepted the message.
+        file_id:
+          type: string
+        file_name:
+          type: string
+        recipient:
+          type: string
+        idempotent_replay:
+          type: boolean
+          description: True when an existing successful result was returned without resending.
+    EmailErrorResponse:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          $ref: "#/components/schemas/EmailErrorDetail"
+    EmailErrorDetail:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
